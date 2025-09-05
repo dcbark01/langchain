@@ -4,6 +4,8 @@ from packaging import version
 from pydantic import BaseModel
 from syrupy.assertion import SnapshotAssertion
 from typing_extensions import override
+import os
+from unittest.mock import patch, MagicMock
 
 from langchain_core.language_models import FakeListLLM
 from langchain_core.output_parsers.list import CommaSeparatedListOutputParser
@@ -13,7 +15,7 @@ from langchain_core.prompts.prompt import PromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_core.runnables.base import Runnable
 from langchain_core.runnables.graph import Edge, Graph, Node
-from langchain_core.runnables.graph_mermaid import _escape_node_label
+from langchain_core.runnables.graph_mermaid import _escape_node_label, MERMAID_BASE_URL
 from langchain_core.utils.pydantic import PYDANTIC_VERSION
 from tests.unit_tests.pydantic_utils import _normalize_schema
 
@@ -561,3 +563,53 @@ def test_graph_mermaid_frontmatter_config(snapshot: SnapshotAssertion) -> None:
             }
         }
     ) == snapshot(name="mermaid")
+
+
+def test_mermaid_base_url_default() -> None:
+    """Test that MERMAID_BASE_URL defaults to https://mermaid.ink"""
+    assert MERMAID_BASE_URL == "https://mermaid.ink"
+
+
+def test_mermaid_base_url_custom() -> None:
+    """Test that MERMAID_BASE_URL can be overridden with environment variable"""
+
+    custom_url = "https://custom.mermaid.com"
+    with patch.dict(os.environ, {"MERMAID_BASE_URL": custom_url}):
+        # Re-import to pick up the new environment variable
+        import importlib
+        import langchain_core.runnables.graph_mermaid
+        importlib.reload(langchain_core.runnables.graph_mermaid)
+        from langchain_core.runnables.graph_mermaid import MERMAID_BASE_URL
+
+        assert MERMAID_BASE_URL == custom_url
+
+
+def test_mermaid_base_url_api_call() -> None:
+    """Test that the API call uses the correct base URL when custom URL is set"""
+
+    custom_url = "https://custom.mermaid.com"
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b"fake image data"
+    with patch.dict(os.environ, {"MERMAID_BASE_URL": custom_url}):
+        with patch('requests.get', return_value=mock_response) as mock_get:
+            # Re-import to pick up the new environment variable
+            import importlib
+            import langchain_core.runnables.graph_mermaid
+            importlib.reload(langchain_core.runnables.graph_mermaid)
+
+            from langchain_core.runnables.graph_mermaid import _render_mermaid_using_api
+
+            # Call the function with minimal parameters
+            try:
+                _render_mermaid_using_api("fake mermaid syntax")
+            except Exception:
+                # Might fail but all we care about for purposes of this test is that
+                # it was called with the correct URL.
+                pass
+
+            # Verify that the URL was constructed with our custom base URL
+            assert mock_get.called
+            args, kwargs = mock_get.call_args
+            url = args[0]  # First argument to request.get is the URL
+            assert url.startswith(custom_url)
